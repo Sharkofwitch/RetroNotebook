@@ -151,16 +151,6 @@ class DebuggerDialog(QDialog):
         )
         right_vbox.addWidget(self._vars_list)
 
-        stack_label = QLabel("  CALL STACK DEPTH")
-        stack_label.setStyleSheet(f"color: {_RETRO_YELLOW}; font-size: 12px;")
-        right_vbox.addWidget(stack_label)
-
-        self._lbl_stack = QLabel("0")
-        self._lbl_stack.setStyleSheet(
-            f"color: {_RETRO_GREEN}; font-size: 20px; font-family: {_RETRO_FONT};"
-            " padding: 4px 8px; border: 1px solid #333;"
-        )
-        right_vbox.addWidget(self._lbl_stack)
         right_vbox.addStretch()
         splitter.addWidget(right_frame)
 
@@ -370,7 +360,7 @@ class NotebookCell(QWidget):
             return
         code = self.input.toPlainText()
         lines = code.splitlines()
-        if not any(l.strip() for l in lines):
+        if not any(line.strip() for line in lines):
             return
         dlg = DebuggerDialog(lines, parent=self)
         dlg.exec()

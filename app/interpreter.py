@@ -617,20 +617,30 @@ class DebugSession:
                 block_end = j
 
             elif upper.startswith('IF '):
+                depth = 1
                 j = i + 1
-                while j < n:
+                while j < n and depth > 0:
                     lu = lines[j].strip().upper()
+                    if lu.startswith('IF '):
+                        depth += 1
+                    elif lu == 'ENDIF':
+                        depth -= 1
                     j += 1
-                    if lu == 'ENDIF':
+                    if depth == 0:
                         break
                 block_end = j
 
             elif upper == 'FRAME':
+                depth = 1
                 j = i + 1
-                while j < n:
+                while j < n and depth > 0:
                     lu = lines[j].strip().upper()
+                    if lu == 'FRAME':
+                        depth += 1
+                    elif lu == 'ENDFRAME':
+                        depth -= 1
                     j += 1
-                    if lu == 'ENDFRAME':
+                    if depth == 0:
                         break
                 block_end = j
 
