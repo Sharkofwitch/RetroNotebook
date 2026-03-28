@@ -1,17 +1,303 @@
-from PySide6.QtWidgets import QWidget, QVBoxLayout, QTextEdit, QPushButton, QLabel, QComboBox, QInputDialog, QHBoxLayout  # QHBoxLayout ergänzt
+from PySide6.QtWidgets import (
+    QWidget, QVBoxLayout, QTextEdit, QPushButton, QLabel, QComboBox,
+    QInputDialog, QHBoxLayout, QDialog, QListWidget, QListWidgetItem,
+    QSplitter, QScrollArea, QFrame,
+)
 from PySide6.QtCore import Qt, QTimer
 from PySide6.QtMultimedia import QMediaPlayer, QAudioOutput
-from app.interpreter import RetroInterpreter
+from app.interpreter import RetroInterpreter, DebugSession
 import markdown2
 import os
 import sys
-from PySide6.QtGui import QPainter, QColor, QPen, QLinearGradient
+from PySide6.QtGui import QPainter, QColor, QPen, QLinearGradient, QFont
 import math
 
 def resource_path(relative_path):
     if hasattr(sys, '_MEIPASS'):
         return os.path.join(sys._MEIPASS, relative_path)
     return os.path.join(os.path.abspath('.'), relative_path)
+
+
+# ---------------------------------------------------------------------------
+# Retro Debugger Dialog
+# ---------------------------------------------------------------------------
+
+_RETRO_DARK  = '#0d0d0d'
+_RETRO_GREEN = '#33ff66'
+_RETRO_YELLOW = '#ffe066'
+_RETRO_PINK  = '#ff33cc'
+_RETRO_FONT  = 'Courier New, monospace'
+
+_BTN_BASE = (
+    "QPushButton {{"
+    "  background: #1a1a1a; color: {color}; font-family: Courier New, monospace;"
+    "  font-size: 14px; border: 2px solid {color}; border-radius: 6px;"
+    "  padding: 4px 14px;"
+    "}}"
+    "QPushButton:hover {{ background: #262626; }}"
+    "QPushButton:disabled {{ color: #444; border-color: #333; }}"
+)
+
+def _btn_style(color=_RETRO_GREEN):
+    return _BTN_BASE.format(color=color)
+
+
+class DebuggerDialog(QDialog):
+    """Retro-styled step-by-step debugger for a Retro Script code cell."""
+
+    def __init__(self, lines, parent=None):
+        super().__init__(parent)
+        self.setWindowTitle("RETRO DEBUGGER")
+        self.setStyleSheet(
+            f"background: {_RETRO_DARK}; color: {_RETRO_GREEN};"
+            f"font-family: {_RETRO_FONT}; font-size: 14px;"
+        )
+        self.resize(860, 560)
+
+        self._lines = lines
+        self._session = DebugSession(lines)
+        self._session.start()
+
+        self._build_ui()
+        self._refresh_code_view()
+        self._refresh_vars()
+        self._append_output_line("▶ Debug session started.  Click a line to toggle breakpoint.", _RETRO_YELLOW)
+
+    # ------------------------------------------------------------------
+    # UI construction
+    # ------------------------------------------------------------------
+
+    def _build_ui(self):
+        root = QVBoxLayout(self)
+        root.setContentsMargins(10, 10, 10, 10)
+
+        # Title bar
+        title = QLabel("◈ RETRO DEBUGGER ◈")
+        title.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        title.setStyleSheet(
+            f"color: {_RETRO_GREEN}; font-size: 18px; font-weight: bold;"
+            f"font-family: {_RETRO_FONT}; letter-spacing: 4px;"
+        )
+        root.addWidget(title)
+
+        # ── Toolbar ──────────────────────────────────────────────────────
+        toolbar = QHBoxLayout()
+        self._btn_step = QPushButton("⮞ Step")
+        self._btn_step.setStyleSheet(_btn_style(_RETRO_GREEN))
+        self._btn_step.setToolTip("Execute the current statement and pause")
+        self._btn_step.clicked.connect(self._on_step)
+
+        self._btn_continue = QPushButton("▶ Continue")
+        self._btn_continue.setStyleSheet(_btn_style(_RETRO_GREEN))
+        self._btn_continue.setToolTip("Run until next breakpoint or end")
+        self._btn_continue.clicked.connect(self._on_continue)
+
+        self._btn_restart = QPushButton("↺ Restart")
+        self._btn_restart.setStyleSheet(_btn_style(_RETRO_YELLOW))
+        self._btn_restart.setToolTip("Restart debug session from the top")
+        self._btn_restart.clicked.connect(self._on_restart)
+
+        self._btn_stop = QPushButton("■ Stop")
+        self._btn_stop.setStyleSheet(_btn_style(_RETRO_PINK))
+        self._btn_stop.setToolTip("Abort debug session")
+        self._btn_stop.clicked.connect(self.reject)
+
+        for btn in [self._btn_step, self._btn_continue, self._btn_restart, self._btn_stop]:
+            toolbar.addWidget(btn)
+        toolbar.addStretch()
+
+        self._lbl_status = QLabel("PAUSED")
+        self._lbl_status.setStyleSheet(
+            f"color: {_RETRO_YELLOW}; font-size: 13px; font-family: {_RETRO_FONT};"
+        )
+        toolbar.addWidget(self._lbl_status)
+        root.addLayout(toolbar)
+
+        # ── Main area: code | inspector ──────────────────────────────────
+        splitter = QSplitter(Qt.Orientation.Horizontal)
+
+        # Left: code listing
+        code_frame = QFrame()
+        code_frame.setStyleSheet(f"background: #111; border: 2px solid {_RETRO_GREEN}; border-radius: 6px;")
+        code_vbox = QVBoxLayout(code_frame)
+        code_vbox.setContentsMargins(4, 4, 4, 4)
+        code_label = QLabel("  SOURCE  (click line to toggle breakpoint)")
+        code_label.setStyleSheet(f"color: {_RETRO_YELLOW}; font-size: 12px;")
+        code_vbox.addWidget(code_label)
+        self._code_list = QListWidget()
+        self._code_list.setStyleSheet(
+            f"background: #111; color: {_RETRO_GREEN}; font-family: {_RETRO_FONT};"
+            " font-size: 13px; border: none; selection-background-color: #1a2a1a;"
+        )
+        self._code_list.setHorizontalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAsNeeded)
+        self._code_list.itemClicked.connect(self._on_line_clicked)
+        code_vbox.addWidget(self._code_list)
+        splitter.addWidget(code_frame)
+
+        # Right: variable inspector + call stack depth
+        right_frame = QFrame()
+        right_frame.setStyleSheet(f"background: #111; border: 2px solid {_RETRO_GREEN}; border-radius: 6px;")
+        right_vbox = QVBoxLayout(right_frame)
+        right_vbox.setContentsMargins(4, 4, 4, 4)
+
+        vars_label = QLabel("  VARIABLES")
+        vars_label.setStyleSheet(f"color: {_RETRO_YELLOW}; font-size: 12px;")
+        right_vbox.addWidget(vars_label)
+
+        self._vars_list = QListWidget()
+        self._vars_list.setStyleSheet(
+            f"background: #111; color: {_RETRO_GREEN}; font-family: {_RETRO_FONT};"
+            " font-size: 13px; border: none;"
+        )
+        right_vbox.addWidget(self._vars_list)
+
+        stack_label = QLabel("  CALL STACK DEPTH")
+        stack_label.setStyleSheet(f"color: {_RETRO_YELLOW}; font-size: 12px;")
+        right_vbox.addWidget(stack_label)
+
+        self._lbl_stack = QLabel("0")
+        self._lbl_stack.setStyleSheet(
+            f"color: {_RETRO_GREEN}; font-size: 20px; font-family: {_RETRO_FONT};"
+            " padding: 4px 8px; border: 1px solid #333;"
+        )
+        right_vbox.addWidget(self._lbl_stack)
+        right_vbox.addStretch()
+        splitter.addWidget(right_frame)
+
+        splitter.setSizes([520, 300])
+        root.addWidget(splitter, stretch=3)
+
+        # ── Output console ────────────────────────────────────────────────
+        out_frame = QFrame()
+        out_frame.setStyleSheet(f"background: #0a0a0a; border: 2px solid {_RETRO_GREEN}; border-radius: 6px;")
+        out_vbox = QVBoxLayout(out_frame)
+        out_vbox.setContentsMargins(4, 4, 4, 4)
+        out_label = QLabel("  OUTPUT")
+        out_label.setStyleSheet(f"color: {_RETRO_YELLOW}; font-size: 12px;")
+        out_vbox.addWidget(out_label)
+        self._output_edit = QTextEdit()
+        self._output_edit.setReadOnly(True)
+        self._output_edit.setStyleSheet(
+            f"background: #0a0a0a; color: {_RETRO_GREEN}; font-family: {_RETRO_FONT};"
+            " font-size: 13px; border: none;"
+        )
+        out_vbox.addWidget(self._output_edit)
+        root.addWidget(out_frame, stretch=1)
+
+    # ------------------------------------------------------------------
+    # Code-view helpers
+    # ------------------------------------------------------------------
+
+    def _refresh_code_view(self):
+        """Rebuild the code list with breakpoint / current-line decorations."""
+        current = self._session.current_line
+        breakpoints = self._session.breakpoints
+
+        self._code_list.clear()
+        for idx, raw_line in enumerate(self._lines):
+            # Prefix: breakpoint marker + line number
+            bp_marker = "● " if idx in breakpoints else "  "
+            text = f"{bp_marker}{idx + 1:>3}  {raw_line.rstrip()}"
+            item = QListWidgetItem(text)
+
+            if idx == current and not self._session.finished:
+                # Highlight current execution line
+                item.setBackground(QColor('#1a3320'))
+                item.setForeground(QColor(_RETRO_GREEN))
+                item.setText("▶ " + text[2:])   # replace leading spaces with arrow
+            elif idx in breakpoints:
+                item.setForeground(QColor(_RETRO_PINK))
+            else:
+                item.setForeground(QColor(_RETRO_GREEN))
+
+            self._code_list.addItem(item)
+
+        if 0 <= current < self._code_list.count():
+            self._code_list.scrollToItem(self._code_list.item(current))
+
+    def _refresh_vars(self):
+        """Rebuild the variable inspector."""
+        self._vars_list.clear()
+        env = self._session.interpreter.env
+        if not env:
+            placeholder = QListWidgetItem("(no variables yet)")
+            placeholder.setForeground(QColor('#555'))
+            self._vars_list.addItem(placeholder)
+            return
+        for name, value in sorted(env.items()):
+            item = QListWidgetItem(f"  {name}  =  {value!r}")
+            item.setForeground(QColor(_RETRO_GREEN))
+            self._vars_list.addItem(item)
+
+    def _append_output_line(self, text, color=None):
+        color = color or _RETRO_GREEN
+        self._output_edit.setTextColor(QColor(color))
+        self._output_edit.append(str(text))
+
+    def _render_state(self, state):
+        """Apply a debug-state dict returned by the session to the UI."""
+        event = state.get('event', '')
+        outputs = state.get('output', [])
+
+        for item in outputs:
+            if isinstance(item, dict) and 'graphics' in item:
+                self._append_output_line("[graphics output – run normally to view]", _RETRO_YELLOW)
+            elif isinstance(item, str) and item.startswith('Error'):
+                self._append_output_line(item, _RETRO_PINK)
+            elif item:
+                self._append_output_line(str(item))
+
+        self._refresh_code_view()
+        self._refresh_vars()
+
+        if event == 'finished':
+            self._lbl_status.setText("FINISHED")
+            self._lbl_status.setStyleSheet(f"color: {_RETRO_GREEN}; font-size: 13px;")
+            self._btn_step.setEnabled(False)
+            self._btn_continue.setEnabled(False)
+            self._append_output_line("■ Execution complete.", _RETRO_YELLOW)
+        elif event == 'breakpoint':
+            line_no = state.get('current_line', -1) + 1
+            self._lbl_status.setText(f"BREAKPOINT  line {line_no}")
+            self._lbl_status.setStyleSheet(f"color: {_RETRO_PINK}; font-size: 13px;")
+            self._append_output_line(f"● Breakpoint hit at line {line_no}.", _RETRO_PINK)
+        else:
+            exec_line = state.get('executed_line', -1) + 1
+            self._lbl_status.setText(f"PAUSED  (executed line {exec_line})")
+            self._lbl_status.setStyleSheet(f"color: {_RETRO_YELLOW}; font-size: 13px;")
+
+    # ------------------------------------------------------------------
+    # Button handlers
+    # ------------------------------------------------------------------
+
+    def _on_line_clicked(self, item):
+        row = self._code_list.row(item)
+        self._session.toggle_breakpoint(row)
+        self._refresh_code_view()
+
+    def _on_step(self):
+        if self._session.finished:
+            return
+        state = self._session.step()
+        self._render_state(state)
+
+    def _on_continue(self):
+        if self._session.finished:
+            return
+        state = self._session.continue_to_breakpoint()
+        self._render_state(state)
+
+    def _on_restart(self):
+        self._session.start()
+        self._output_edit.clear()
+        self._btn_step.setEnabled(True)
+        self._btn_continue.setEnabled(True)
+        self._lbl_status.setText("PAUSED")
+        self._lbl_status.setStyleSheet(f"color: {_RETRO_YELLOW}; font-size: 13px;")
+        self._refresh_code_view()
+        self._refresh_vars()
+        self._append_output_line("↺ Session restarted.", _RETRO_YELLOW)
+
 
 class NotebookCell(QWidget):
     def __init__(self, cell_type="Code"):
@@ -39,10 +325,21 @@ class NotebookCell(QWidget):
         self.input = QTextEdit()
         self.inner_layout.addWidget(self.input)
 
-        # Ausführen-Button (immer sichtbar)
+        # Ausführen-Button und Debug-Button nebeneinander
+        btn_row = QHBoxLayout()
         self.run_button = QPushButton("Run")
         self.run_button.clicked.connect(self.execute)
-        self.inner_layout.addWidget(self.run_button)
+        btn_row.addWidget(self.run_button)
+
+        self.debug_button = QPushButton("Debug")
+        self.debug_button.setToolTip("Open interactive debugger for this cell")
+        self.debug_button.clicked.connect(self.open_debugger)
+        self.debug_button.setStyleSheet(
+            f"background: #1a1a1a; color: {_RETRO_YELLOW}; font-family: {_RETRO_FONT};"
+            f" font-size: 13px; border: 2px solid {_RETRO_YELLOW}; border-radius: 6px; padding: 3px 12px;"
+        )
+        btn_row.addWidget(self.debug_button)
+        self.inner_layout.addLayout(btn_row)
 
         # Ausgabe (initial leer)
         self.output = QLabel("")
@@ -66,6 +363,17 @@ class NotebookCell(QWidget):
         self.anim_timer.timeout.connect(self.update)
         self.anim_timer.start(60)
         self.anim_phase = 0
+
+    def open_debugger(self):
+        """Open the interactive debugger for this code cell (Code cells only)."""
+        if self.cell_type.currentText() != "Code":
+            return
+        code = self.input.toPlainText()
+        lines = code.splitlines()
+        if not any(l.strip() for l in lines):
+            return
+        dlg = DebuggerDialog(lines, parent=self)
+        dlg.exec()
 
     def execute(self):
         # Status auf "Läuft..." setzen, falls möglich

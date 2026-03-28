@@ -521,3 +521,220 @@ class RetroInterpreter:
         except Exception:
             return None
         return None
+
+
+class DebugSession:
+    """Step-by-step debug runner for RetroInterpreter.
+
+    Groups source lines into logical *steps* (single statements, or entire
+    block constructs like IF/WHILE/FOR).  The caller can advance one step at
+    a time, run until a breakpoint, or abort the session.
+    """
+
+    def __init__(self, lines):
+        self.lines = lines
+        self.breakpoints = set()          # 0-based source line indices
+        self._steps = []                  # list of step-dicts built by _analyse
+        self._step_idx = 0
+        self.current_line = -1            # 0-based source line currently "at"
+        self.output_so_far = []
+        self.finished = False
+        self.interpreter = RetroInterpreter()
+        # Flag to distinguish "just started / just resumed from breakpoint"
+        # so continue_to_breakpoint does not stop on the current line's own
+        # breakpoint marker before executing anything.
+        self._just_paused = False
+
+    # ------------------------------------------------------------------
+    # Breakpoint management
+    # ------------------------------------------------------------------
+
+    def toggle_breakpoint(self, line_idx):
+        if line_idx in self.breakpoints:
+            self.breakpoints.discard(line_idx)
+        else:
+            self.breakpoints.add(line_idx)
+
+    # ------------------------------------------------------------------
+    # Session lifecycle
+    # ------------------------------------------------------------------
+
+    def start(self):
+        """(Re-)initialise the session ready to execute from the top."""
+        self.interpreter = RetroInterpreter()
+        self._steps = self._analyse(self.lines)
+        self._step_idx = 0
+        self.output_so_far = []
+        self.finished = False
+        self._just_paused = True  # Treat the very first position as "just paused"
+        if self._steps:
+            self.current_line = self._steps[0]['start_line']
+        else:
+            self.current_line = -1
+            self.finished = True
+
+    # ------------------------------------------------------------------
+    # Execution helpers
+    # ------------------------------------------------------------------
+
+    def _analyse(self, lines):
+        """Split *lines* into logical execution steps."""
+        steps = []
+        n = len(lines)
+        i = 0
+        while i < n:
+            raw = lines[i]
+            stripped = raw.strip()
+            if not stripped or stripped.startswith('#'):
+                i += 1
+                continue
+
+            upper = stripped.upper()
+            start = i
+
+            if upper.startswith('WHILE '):
+                depth = 1
+                j = i + 1
+                while j < n and depth > 0:
+                    lu = lines[j].strip().upper()
+                    if lu.startswith('WHILE '):
+                        depth += 1
+                    elif lu == 'ENDWHILE':
+                        depth -= 1
+                    j += 1
+                block_end = j
+
+            elif upper.startswith('FOR '):
+                depth = 1
+                j = i + 1
+                while j < n and depth > 0:
+                    lu = lines[j].strip().upper()
+                    if lu.startswith('FOR '):
+                        depth += 1
+                    elif lu == 'NEXT':
+                        depth -= 1
+                    j += 1
+                block_end = j
+
+            elif upper.startswith('IF '):
+                j = i + 1
+                while j < n:
+                    lu = lines[j].strip().upper()
+                    j += 1
+                    if lu == 'ENDIF':
+                        break
+                block_end = j
+
+            elif upper == 'FRAME':
+                j = i + 1
+                while j < n:
+                    lu = lines[j].strip().upper()
+                    j += 1
+                    if lu == 'ENDFRAME':
+                        break
+                block_end = j
+
+            else:
+                block_end = i + 1
+
+            steps.append({
+                'start_line': start,
+                'end_line': block_end,
+                'source_lines': lines[start:block_end],
+            })
+            i = block_end
+
+        return steps
+
+    def _execute_step(self, step):
+        """Run one step dict through the interpreter; return list of outputs."""
+        results = self.interpreter.run_block(step['source_lines'])
+        outputs = []
+        for r in results:
+            if isinstance(r, list):
+                outputs.extend(r)
+            elif r:
+                outputs.append(r)
+        return outputs
+
+    def _make_state(self, event, executed_line, outputs):
+        """Build the state dict returned to the UI."""
+        return {
+            'event': event,
+            'executed_line': executed_line,
+            'current_line': self.current_line,
+            'vars': dict(self.interpreter.env),
+            'output': outputs,
+            'finished': self.finished,
+        }
+
+    # ------------------------------------------------------------------
+    # Public step / continue API
+    # ------------------------------------------------------------------
+
+    def step(self):
+        """Execute the current step and advance to the next.
+
+        Returns a state dict for the UI to consume.
+        """
+        if self.finished or self._step_idx >= len(self._steps):
+            self.finished = True
+            return self._make_state('finished', self.current_line, [])
+
+        step = self._steps[self._step_idx]
+        exec_line = step['start_line']
+        self.current_line = exec_line
+        self._just_paused = False
+
+        outputs = self._execute_step(step)
+        self.output_so_far.extend(outputs)
+        self._step_idx += 1
+
+        if self._step_idx >= len(self._steps):
+            self.finished = True
+            return self._make_state('finished', exec_line, outputs)
+
+        self.current_line = self._steps[self._step_idx]['start_line']
+        self._just_paused = True
+        return self._make_state('stepped', exec_line, outputs)
+
+    def continue_to_breakpoint(self):
+        """Run steps until a breakpoint is hit or execution finishes.
+
+        Returns a state dict (event='breakpoint' or event='finished').
+
+        Note: when called immediately after :meth:`start` or after stopping at
+        a breakpoint (``_just_paused`` is True), the current step's own
+        breakpoint marker is skipped so that execution advances at least one
+        step before the next pause.  This prevents a "continue" immediately
+        re-pausing on the same line the user already stopped at.
+        """
+        if self.finished or self._step_idx >= len(self._steps):
+            self.finished = True
+            return self._make_state('finished', self.current_line, [])
+
+        all_outputs = []
+        skip_current = self._just_paused
+        self._just_paused = False
+
+        while self._step_idx < len(self._steps):
+            step = self._steps[self._step_idx]
+            exec_line = step['start_line']
+
+            # Pause *before* executing if this line has a breakpoint,
+            # but skip the very first check so we advance at least one step.
+            if not skip_current and exec_line in self.breakpoints:
+                self.current_line = exec_line
+                self._just_paused = True
+                return self._make_state('breakpoint', exec_line, all_outputs)
+
+            skip_current = False
+            self.current_line = exec_line
+            outputs = self._execute_step(step)
+            self.output_so_far.extend(outputs)
+            all_outputs.extend(outputs)
+            self._step_idx += 1
+
+        self.finished = True
+        self.current_line = self._steps[-1]['start_line'] if self._steps else -1
+        return self._make_state('finished', self.current_line, all_outputs)
