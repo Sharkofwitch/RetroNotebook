@@ -2,6 +2,8 @@
 
 Ein modernes, retro-inspiriertes Desktop-Notebook für Code, Mathematik, Logik und Minigames.
 
+> **Aktuelle Version: v1.4.0**
+
 ## Features
 - Hochwertige Retro-Optik (CRT-Look, Scanlines, Glow, animierte Pixel, Retro-Icons)
 - Zellen für Code (eigener Interpreter), Markdown **und Tests**
@@ -9,9 +11,10 @@ Ein modernes, retro-inspiriertes Desktop-Notebook für Code, Mathematik, Logik u
 - **Test-Zellen** mit Assertion-Befehlen (`ASSERT`, `ASSERT_EQ`, `ASSERT_APPROX`) und farbcodiertem Ergebnis
 - **Test-Runner-Panel** – alle Test-Zellen auf einmal ausführen, mit Gesamt-/Bestanden-/Fehlgeschlagen-Übersicht
 - **Interaktiver Debugger** – Schritt-für-Schritt-Ausführung, Breakpoints, Variable Inspector
+- **Versionsverlauf & Wiederherstellung** – automatische Snapshots bei jedem Speichern; 🕑 History-Dialog zeigt alle Snapshots mit Diff-Vorschau und ermöglicht Ein-Klick-Wiederherstellung (reversibel)
 - Grafikbefehle: Punkte, Linien, Kreise (z.B. zum Plotten von Daten)
 - Soundeffekte beim Ausführen und Starten
-- Notebook speichern und laden (JSON)
+- Notebook speichern und laden (JSON, gespeichert in `~/retro-notebook-notebooks/`)
 - Fehlerabfang und Endlosschleifen-Schutz
 - Minigames: **CodeGrid** (Logikpuzzle, mehrere Spielmodi, Daily Challenge, XP, Highscore, Achievements, Seed-System), **Bit Factory** (Survival Builder)
 - Fortschrittssystem: XP, Highscore, Achievements, Daily Challenge
@@ -110,6 +113,18 @@ Klicke **Debug** in einer Code-Zelle, um den Schritt-für-Schritt-Debugger zu ö
 - "Continue" führt bis zum nächsten Breakpoint aus
 - Session jederzeit neu starten
 
+## Versionsverlauf & Wiederherstellung
+
+Klicke **🕑 History** in der Werkzeugleiste, um den Versionsverlauf des aktuellen Notebooks zu öffnen:
+
+- Jeder manuelle Speichervorgang erstellt automatisch einen Snapshot.
+- Der History-Dialog zeigt alle Snapshots (neueste zuerst) mit Zeitstempel, Grund und Zellanzahl.
+- Die Vorschau zeigt den Inhalt jeder Zelle im ausgewählten Snapshot (farbkodiert nach Typ).
+- Die Diff-Leiste zeigt, was sich vom Snapshot zum aktuellen Stand geändert hat.
+- **Wiederherstellen** erstellt zunächst einen „Pre-restore"-Snapshot, sodass jede Wiederherstellung umkehrbar ist.
+- Snapshots werden lokal in `~/retro-notebook-notebooks/.history/` gespeichert und überleben Neustarts.
+- Maximal 20 Snapshots pro Notebook werden aufbewahrt (älteste werden automatisch gelöscht).
+
 ## Hinweise
 - Alle Grafikbefehle in einer Codezelle werden als ein Bild angezeigt.
 - WHILE/ENDWHILE, FOR/NEXT und IF/ELSE/ENDIF unterstützen Blöcke.
@@ -117,19 +132,18 @@ Klicke **Debug** in einer Code-Zelle, um den Schritt-für-Schritt-Debugger zu ö
 - Maximal 1000 WHILE-Durchläufe (Schutz vor Endlosschleifen).
 - Ressourcen werden immer über `resource_path` geladen (auch im App-Bundle).
 - Test-Zellen werden in einer eigenen, isolierten Interpreter-Instanz ausgeführt.
+- Notebooks werden in `~/retro-notebook-notebooks/` gespeichert.
 
 ## To-Do / Ideen
 - Export als HTML/PDF
-- Undo/Redo für Zellen
+- Undo/Redo für einzelne Zell-Edits
 - Farbschema-Auswahl (verschiedene Retro-Themes)
-- Virtuelle Statusleiste/LED
-- Noch mehr Animationen und Retro-Effekte
 - Weitere Minigames und Easter Eggs
 - Bessere macOS-Integration (Dock-Icon, Info.plist, App-Icon)
-- CI-Stil JSON-Test-Export (Design vorbereitet)
 
 ---
 
-(c) 2025 by Jakob Szarkowicz & Contributors  
+(c) 2025-2026 by Jakob Szarkowicz & Contributors  
 MIT License, siehe LICENSE  
 Siehe [CHANGELOG.md](CHANGELOG.md) für eine vollständige Änderungshistorie.
+

@@ -1,16 +1,211 @@
 from PySide6.QtWidgets import (
     QApplication, QWidget, QVBoxLayout, QScrollArea,
-    QPushButton, QFrame, QLabel, QMessageBox, QHBoxLayout, QDialog
+    QPushButton, QFrame, QLabel, QMessageBox, QHBoxLayout, QDialog,
+    QListWidget, QListWidgetItem, QSplitter,
 )
 from PySide6.QtCore import Qt, QTimer
 from PySide6.QtMultimedia import QMediaPlayer, QAudioOutput
 from app.widgets.cell import NotebookCell, TestRunnerDialog
-from app.storage import save_notebook, load_notebook
-from PySide6.QtGui import QCursor, QKeyEvent
+from app.storage import save_notebook, load_notebook, cells_to_data
+from app.history import save_snapshot, list_snapshots, get_diff_summary
+from PySide6.QtGui import QCursor, QKeyEvent, QColor
 import sys
 import os
 import random
 from app.minigame import show_minigame
+
+
+# ---------------------------------------------------------------------------
+# Version History Dialog
+# ---------------------------------------------------------------------------
+
+_H_DARK   = '#0d0d0d'
+_H_GREEN  = '#33ff66'
+_H_YELLOW = '#ffe066'
+_H_PINK   = '#ff33cc'
+_H_FONT   = 'Courier New, monospace'
+
+_REASON_LABELS = {
+    'manual':      '💾 Save',
+    'pre-restore': '↩ Pre-restore',
+}
+
+
+def _h_btn(color):
+    return (
+        f"QPushButton {{ background: #1a1a1a; color: {color}; "
+        f"font-family: {_H_FONT}; font-size: 14px; "
+        f"border: 2px solid {color}; border-radius: 6px; padding: 4px 14px; }}"
+        f"QPushButton:hover {{ background: #262626; }}"
+        f"QPushButton:disabled {{ color: #444; border-color: #333; }}"
+    )
+
+
+class HistoryDialog(QDialog):
+    """Retro-styled notebook version history and restore dialog."""
+
+    def __init__(self, notebook_name, current_cells_data, restore_fn, parent=None):
+        super().__init__(parent)
+        self.setWindowTitle("◈ NOTEBOOK HISTORY ◈")
+        self.setStyleSheet(
+            f"background: {_H_DARK}; color: {_H_GREEN};"
+            f"font-family: {_H_FONT}; font-size: 13px;"
+        )
+        self.resize(820, 540)
+        self._notebook_name = notebook_name
+        self._current_cells_data = current_cells_data
+        self._restore_fn = restore_fn
+        self._snapshots = []
+        self._build_ui()
+        self._load_snapshots()
+
+    # ------------------------------------------------------------------
+    # UI construction
+    # ------------------------------------------------------------------
+
+    def _build_ui(self):
+        root = QVBoxLayout(self)
+        root.setContentsMargins(12, 12, 12, 12)
+        root.setSpacing(8)
+
+        # Title
+        title = QLabel("◈ NOTEBOOK HISTORY ◈")
+        title.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        title.setStyleSheet(
+            f"color: {_H_PINK}; font-size: 18px; font-weight: bold;"
+            f"font-family: {_H_FONT}; letter-spacing: 4px;"
+        )
+        root.addWidget(title)
+
+        # Split: left = snapshot list, right = cell preview
+        splitter = QSplitter(Qt.Orientation.Horizontal)
+        splitter.setStyleSheet("QSplitter::handle { background: #333; width: 4px; }")
+
+        # Left panel
+        left = QWidget()
+        left_layout = QVBoxLayout(left)
+        left_layout.setContentsMargins(0, 0, 4, 0)
+        lbl_snaps = QLabel("SNAPSHOTS")
+        lbl_snaps.setStyleSheet(
+            f"color: {_H_YELLOW}; font-size: 12px; font-family: {_H_FONT};"
+        )
+        left_layout.addWidget(lbl_snaps)
+        self._snapshot_list = QListWidget()
+        self._snapshot_list.setStyleSheet(
+            f"background: #111; color: {_H_GREEN};"
+            f"font-family: {_H_FONT}; font-size: 12px; border: 1px solid #333;"
+        )
+        self._snapshot_list.currentRowChanged.connect(self._on_row_changed)
+        left_layout.addWidget(self._snapshot_list)
+        splitter.addWidget(left)
+
+        # Right panel
+        right = QWidget()
+        right_layout = QVBoxLayout(right)
+        right_layout.setContentsMargins(4, 0, 0, 0)
+        lbl_preview = QLabel("PREVIEW")
+        lbl_preview.setStyleSheet(
+            f"color: {_H_YELLOW}; font-size: 12px; font-family: {_H_FONT};"
+        )
+        right_layout.addWidget(lbl_preview)
+        self._preview_list = QListWidget()
+        self._preview_list.setStyleSheet(
+            f"background: #111; color: {_H_GREEN};"
+            f"font-family: {_H_FONT}; font-size: 12px; border: 1px solid #333;"
+        )
+        right_layout.addWidget(self._preview_list)
+        splitter.addWidget(right)
+
+        splitter.setSizes([360, 440])
+        root.addWidget(splitter)
+
+        # Diff info bar
+        self._lbl_diff = QLabel("")
+        self._lbl_diff.setStyleSheet(
+            f"color: {_H_YELLOW}; font-size: 12px; font-family: {_H_FONT};"
+            f"border: 1px solid #333; padding: 4px; background: #111;"
+        )
+        root.addWidget(self._lbl_diff)
+
+        # Buttons
+        btn_row = QHBoxLayout()
+        self._btn_restore = QPushButton("⟳  Restore Snapshot")
+        self._btn_restore.setStyleSheet(_h_btn(_H_GREEN))
+        self._btn_restore.setEnabled(False)
+        self._btn_restore.clicked.connect(self._restore_snapshot)
+        btn_row.addWidget(self._btn_restore)
+
+        btn_close = QPushButton("✕  Close")
+        btn_close.setStyleSheet(_h_btn(_H_PINK))
+        btn_close.clicked.connect(self.accept)
+        btn_row.addWidget(btn_close)
+
+        root.addLayout(btn_row)
+
+    # ------------------------------------------------------------------
+    # Data loading
+    # ------------------------------------------------------------------
+
+    def _load_snapshots(self):
+        self._snapshots = list_snapshots(self._notebook_name)
+        self._snapshot_list.clear()
+        if not self._snapshots:
+            item = QListWidgetItem("No snapshots found.")
+            item.setForeground(QColor('#555555'))
+            self._snapshot_list.addItem(item)
+            return
+
+        for snap in self._snapshots:
+            try:
+                import datetime as _dt
+                ts = _dt.datetime.fromisoformat(snap['timestamp']).strftime('%Y-%m-%d %H:%M:%S')
+            except (ValueError, KeyError):
+                ts = snap.get('timestamp', '')[:19].replace('T', ' ')
+            reason = _REASON_LABELS.get(snap['reason'], snap['reason'])
+            n = len(snap['cells'])
+            self._snapshot_list.addItem(
+                QListWidgetItem(f"{ts}  {reason}  ({n} cells)")
+            )
+
+    # ------------------------------------------------------------------
+    # Interactions
+    # ------------------------------------------------------------------
+
+    def _on_row_changed(self, row):
+        if row < 0 or row >= len(self._snapshots):
+            self._preview_list.clear()
+            self._lbl_diff.setText("")
+            self._btn_restore.setEnabled(False)
+            return
+
+        snap = self._snapshots[row]
+        snap_cells = snap['cells']
+
+        # Populate preview
+        self._preview_list.clear()
+        _type_colors = {
+            'CODE': _H_GREEN, 'MARKDOWN': _H_YELLOW, 'TEST': _H_PINK
+        }
+        for cell in snap_cells:
+            type_label = cell.get('type', 'code').upper()
+            input_text = cell.get('input', '').strip()
+            lines = input_text.splitlines()
+            first_line = lines[0][:70] if lines else ''
+            item = QListWidgetItem(f"[{type_label}] {first_line}")
+            item.setForeground(QColor(_type_colors.get(type_label, _H_GREEN)))
+            self._preview_list.addItem(item)
+
+        # Diff vs. current notebook
+        diff = get_diff_summary(snap_cells, self._current_cells_data)
+        self._lbl_diff.setText(f"Changes from this snapshot to current:  {diff}")
+        self._btn_restore.setEnabled(True)
+
+    def _restore_snapshot(self):
+        row = self._snapshot_list.currentRow()
+        if row < 0 or row >= len(self._snapshots):
+            return
+        self._restore_fn(self._snapshots[row]['cells'])
+        self.accept()
 
 
 def resource_path(relative_path):
@@ -315,11 +510,20 @@ def start_app():
         layout.addWidget(run_tests_button)
 
         # Buttons zum Speichern und Laden des Notebooks
-        save_button = QPushButton("Speichern")
-        load_button = QPushButton("Laden")
+        save_button = QPushButton("💾  Speichern")
+        load_button = QPushButton("📂  Laden")
+        history_button = QPushButton("🕑  History")
+        history_button.setStyleSheet(
+            'font-size:14px; background:#1a1a1a; color:#ffe066;'
+            'border:2px solid #ffe066; border-radius:8px; padding:6px 20px;'
+            'font-family:Courier New,monospace;'
+        )
 
-        layout.addWidget(save_button)
-        layout.addWidget(load_button)
+        btn_row_sl = QHBoxLayout()
+        btn_row_sl.addWidget(save_button)
+        btn_row_sl.addWidget(load_button)
+        btn_row_sl.addWidget(history_button)
+        layout.addLayout(btn_row_sl)
 
         # About-Button
         about_button = QPushButton("About")
@@ -329,13 +533,14 @@ def start_app():
             msg.setText(
                 """
 <pre style='color:#33ff66; background:#0d0d0d; font-family:Courier New,monospace;'>
-RETRO NOTEBOOK v1.3
-(c) 2025 by Jakob Szarkowicz
+RETRO NOTEBOOK v1.4.0
+(c) 2025-2026 by Jakob Szarkowicz
 
 A retro-inspired notebook for code, math & learning.
 
 Features: Code cells, Markdown, Test cells (ASSERT/ASSERT_EQ/
-ASSERT_APPROX), interactive debugger, graphics, minigames.
+ASSERT_APPROX), interactive debugger, graphics, minigames,
+version history with one-click restore.
 
 https://github.com/sharkofwitch/retro-notebook
 This project is licensed under the MIT License.
@@ -380,32 +585,51 @@ This project is licensed under the MIT License.
         set_status('#33ff66', 'Bereit')
 
         # Save/Load-Handler
-        NOTEBOOK_FILE = "notebooks/auto_save.json"
+        NOTEBOOK_FILE = "auto_save.json"
+        NOTEBOOK_NAME = "auto_save"
+
+        # Helper: clear cells and populate from data list
+        def restore_cells(cell_data, take_snapshot=False):
+            if take_snapshot and cells:
+                save_snapshot(cells, NOTEBOOK_NAME, reason="pre-restore")
+            for i in reversed(range(scroll_layout.count())):
+                widget = scroll_layout.itemAt(i).widget()
+                if widget:
+                    widget.setParent(None)
+            cells.clear()
+            for cd in cell_data:
+                cell_type = cd.get("type", "Code").capitalize()
+                add_cell(cell_type, cd.get("input", ""), cd.get("output", ""))
 
         # Funktion zum Speichern des Notebooks
         def on_save():
             save_notebook(cells, NOTEBOOK_FILE)
+            save_snapshot(cells, NOTEBOOK_NAME, reason="manual")
+            set_status('#33ff66', 'Gespeichert ✓')
+            QTimer.singleShot(2000, lambda: set_status('#33ff66', 'Bereit'))
 
         # Funktion zum Laden des Notebooks
         def on_load():
             try:
                 data = load_notebook(NOTEBOOK_FILE)
-                # Vorherige Zellen entfernen
-                for i in reversed(range(scroll_layout.count())):
-                    scroll_layout.itemAt(i).widget().setParent(None)
-                cells.clear()
-                # Neue Zellen anlegen
-                for cell_data in data:
-                    cell_type = cell_data.get("type", "Code").capitalize()
-                    input_text = cell_data.get("input", "")
-                    output_text = cell_data.get("output", "")
-                    add_cell(cell_type, input_text, output_text)
+                restore_cells(data)
             except FileNotFoundError:
                 print("Keine gespeicherte Datei gefunden.")
+
+        # History dialog
+        def open_history():
+            current_data = cells_to_data(cells)
+            dlg = HistoryDialog(
+                NOTEBOOK_NAME, current_data,
+                lambda data: restore_cells(data, take_snapshot=True),
+                parent=window,
+            )
+            dlg.exec()
 
         # Verbinden der Buttons mit den Funktionen
         save_button.clicked.connect(on_save)
         load_button.clicked.connect(on_load)
+        history_button.clicked.connect(open_history)
 
         # Drag & Drop für Zellen aktivieren
         scroll_content.setAcceptDrops(True)
