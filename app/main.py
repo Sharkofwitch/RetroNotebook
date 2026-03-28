@@ -533,13 +533,14 @@ def start_app():
             msg.setText(
                 """
 <pre style='color:#33ff66; background:#0d0d0d; font-family:Courier New,monospace;'>
-RETRO NOTEBOOK v1.3
-(c) 2025 by Jakob Szarkowicz
+RETRO NOTEBOOK v1.4.0
+(c) 2025-2026 by Jakob Szarkowicz
 
 A retro-inspired notebook for code, math & learning.
 
 Features: Code cells, Markdown, Test cells (ASSERT/ASSERT_EQ/
-ASSERT_APPROX), interactive debugger, graphics, minigames.
+ASSERT_APPROX), interactive debugger, graphics, minigames,
+version history with one-click restore.
 
 https://github.com/sharkofwitch/retro-notebook
 This project is licensed under the MIT License.
