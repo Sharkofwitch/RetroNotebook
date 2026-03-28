@@ -385,6 +385,32 @@ class RetroInterpreter:
     # Assertion handlers (used by test cells)
     # ------------------------------------------------------------------
 
+    @staticmethod
+    def _split_top_level(text, sep=','):
+        """Split *text* on *sep* characters that are at bracket/paren depth 0.
+
+        This avoids breaking on commas inside list literals like ``[1, 2]``
+        or function calls like ``max(a, b)``.
+        """
+        parts = []
+        depth = 0
+        current = []
+        for ch in text:
+            if ch in '([{':
+                depth += 1
+                current.append(ch)
+            elif ch in ')]}':
+                depth -= 1
+                current.append(ch)
+            elif ch == sep and depth == 0:
+                parts.append(''.join(current).strip())
+                current = []
+            else:
+                current.append(ch)
+        if current or parts:
+            parts.append(''.join(current).strip())
+        return parts
+
     def _handle_assert(self, line):
         """ASSERT expr  – passes if expr is truthy."""
         expr = line[7:].strip()
@@ -416,14 +442,14 @@ class RetroInterpreter:
     def _handle_assert_eq(self, line):
         """ASSERT_EQ a, b  – passes if a == b."""
         args_str = line[10:].strip()
-        parts = args_str.split(",", 1)
+        parts = self._split_top_level(args_str)
         if len(parts) != 2:
             return {"assertion": {
                 "type": "ASSERT_EQ", "passed": False,
                 "expr": args_str, "actual": None, "expected": None,
                 "message": f"ASSERT_EQ syntax error: expected 2 arguments",
             }}
-        expr_a, expr_b = parts[0].strip(), parts[1].strip()
+        expr_a, expr_b = parts[0], parts[1]
         try:
             a = self.eval_expr(expr_a)
             b = self.eval_expr(expr_b)
@@ -447,7 +473,7 @@ class RetroInterpreter:
     def _handle_assert_approx(self, line):
         """ASSERT_APPROX a, b [, tol]  – passes if |a - b| <= tol (default 1e-6)."""
         args_str = line[14:].strip()
-        parts = [p.strip() for p in args_str.split(",")]
+        parts = self._split_top_level(args_str)
         if len(parts) < 2 or len(parts) > 3:
             return {"assertion": {
                 "type": "ASSERT_APPROX", "passed": False,
@@ -505,7 +531,10 @@ class RetroInterpreter:
         raw = fresh.run_block(lines)
 
         def _collect(item):
-            if isinstance(item, dict) and 'assertion' in item:
+            if isinstance(item, list):
+                for sub in item:
+                    _collect(sub)
+            elif isinstance(item, dict) and 'assertion' in item:
                 assertions.append(item['assertion'])
             elif isinstance(item, dict) and 'graphics' in item:
                 pass  # graphics are ignored in test context
@@ -515,11 +544,7 @@ class RetroInterpreter:
                 outputs.append(str(item))
 
         for r in raw:
-            if isinstance(r, list):
-                for sub in r:
-                    _collect(sub)
-            else:
-                _collect(r)
+            _collect(r)
 
         return {'assertions': assertions, 'outputs': outputs, 'errors': errors}
 

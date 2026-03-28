@@ -395,6 +395,7 @@ class TestRunnerDialog(QDialog):
         total_pass = 0
         total_fail = 0
         total_assert = 0
+        total_errors = 0
 
         for cell_idx, cell in test_cells:
             result = cell.run_test()
@@ -405,6 +406,7 @@ class TestRunnerDialog(QDialog):
             total_pass += n_pass
             total_fail += n_fail
             total_assert += len(assertions)
+            total_errors += len(errors)
 
             cell_label = f"Cell {cell_idx + 1}"
             preview = cell.input.toPlainText().strip().splitlines()
@@ -475,13 +477,18 @@ class TestRunnerDialog(QDialog):
             })
 
         # Summary
-        if total_fail == 0:
+        if total_fail == 0 and total_errors == 0:
             summary = f"✓  ALL PASSED  –  {total_pass}/{total_assert} assertions"
             s_color = _RETRO_GREEN
         else:
-            summary = (
-                f"✗  {total_fail} FAILED  –  {total_pass}/{total_assert} assertions"
-            )
+            parts = []
+            if total_fail:
+                parts.append(f"{total_fail} FAILED")
+            if total_errors:
+                error_label = "ERROR" if total_errors == 1 else "ERRORS"
+                parts.append(f"{total_errors} {error_label}")
+            issues = ", ".join(parts)
+            summary = f"✗  {issues}  –  {total_pass}/{total_assert} assertions"
             s_color = _RETRO_PINK
 
         self._lbl_summary.setText(summary)
@@ -511,7 +518,11 @@ class TestRunnerDialog(QDialog):
                 json.dump(self._report, f, indent=2, default=str)
 
 
+# ---------------------------------------------------------------------------
+# Notebook Cell
+# ---------------------------------------------------------------------------
 
+class NotebookCell(QWidget):
     def __init__(self, cell_type="Code"):
         super().__init__()
 
@@ -701,10 +712,18 @@ class TestRunnerDialog(QDialog):
         elif cell_type == "Test":
             result = self.run_test()
             assertions = result.get('assertions', [])
+            errors = result.get('errors', [])
             failed = sum(1 for a in assertions if not a['passed'])
+            error_count = len(errors)
             if main_window and hasattr(main_window, 'set_status'):
-                if result.get('errors') or failed:
-                    main_window.set_status('#ff3333', f'Tests: {failed} failed')
+                if failed or error_count:
+                    if failed and error_count:
+                        message = f'Tests: {failed} failed, {error_count} error(s)'
+                    elif failed:
+                        message = f'Tests: {failed} failed'
+                    else:
+                        message = f'Tests: {error_count} error(s)'
+                    main_window.set_status('#ff3333', message)
                 else:
                     main_window.set_status('#33ff66', 'Tests passed')
         else:
