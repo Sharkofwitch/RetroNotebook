@@ -4,7 +4,7 @@ from PySide6.QtWidgets import (
 )
 from PySide6.QtCore import Qt, QTimer
 from PySide6.QtMultimedia import QMediaPlayer, QAudioOutput
-from app.widgets.cell import NotebookCell
+from app.widgets.cell import NotebookCell, TestRunnerDialog
 from app.storage import save_notebook, load_notebook
 from PySide6.QtGui import QCursor, QKeyEvent
 import sys
@@ -301,6 +301,19 @@ def start_app():
 
         layout.addWidget(new_cell_button)
 
+        # Test-Runner-Button
+        run_tests_button = QPushButton("▶  Run Tests")
+        run_tests_button.setStyleSheet(
+            'font-size:15px; background:#1a1a1a; color:#ff33cc;'
+            'border:2px solid #ff33cc; border-radius:8px; padding:6px 20px;'
+            'font-family:Courier New,monospace;'
+        )
+        def open_test_runner():
+            dlg = TestRunnerDialog(cells, scroll_area, parent=window)
+            dlg.exec()
+        run_tests_button.clicked.connect(open_test_runner)
+        layout.addWidget(run_tests_button)
+
         # Buttons zum Speichern und Laden des Notebooks
         save_button = QPushButton("Speichern")
         load_button = QPushButton("Laden")
@@ -316,12 +329,13 @@ def start_app():
             msg.setText(
                 """
 <pre style='color:#33ff66; background:#0d0d0d; font-family:Courier New,monospace;'>
-RETRO NOTEBOOK v1.2
+RETRO NOTEBOOK v1.3
 (c) 2025 by Jakob Szarkowicz
 
 A retro-inspired notebook for code, math & learning.
 
-ASCII-Design, Sound, und mehr!
+Features: Code cells, Markdown, Test cells (ASSERT/ASSERT_EQ/
+ASSERT_APPROX), interactive debugger, graphics, minigames.
 
 https://github.com/sharkofwitch/retro-notebook
 This project is licensed under the MIT License.

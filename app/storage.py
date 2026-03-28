@@ -17,6 +17,7 @@ def save_notebook(cells, filename):
         }
         if cell_type == "Code":
             entry["output"] = cell.output.text()
+        # Test cell outputs are intentionally NOT persisted
         data.append(entry)
     path = get_notebook_path(filename)
     with open(path, "w", encoding="utf-8") as f:

@@ -289,7 +289,229 @@ class DebuggerDialog(QDialog):
         self._append_output_line("↺ Session restarted.", _RETRO_YELLOW)
 
 
-class NotebookCell(QWidget):
+# ---------------------------------------------------------------------------
+# Test Runner Dialog
+# ---------------------------------------------------------------------------
+
+class TestRunnerDialog(QDialog):
+    """Retro-styled panel that runs all Test cells and shows pass/fail summary."""
+
+    def __init__(self, cells, scroll_area, parent=None):
+        super().__init__(parent)
+        self.setWindowTitle("◈ RETRO TEST RUNNER ◈")
+        self.setStyleSheet(
+            f"background: {_RETRO_DARK}; color: {_RETRO_GREEN};"
+            f"font-family: {_RETRO_FONT}; font-size: 13px;"
+        )
+        self.resize(760, 520)
+        self._cells = cells
+        self._scroll_area = scroll_area
+        self._build_ui()
+        self._run_all()
+
+    # ------------------------------------------------------------------
+    # UI construction
+    # ------------------------------------------------------------------
+
+    def _build_ui(self):
+        root = QVBoxLayout(self)
+        root.setContentsMargins(12, 12, 12, 12)
+        root.setSpacing(8)
+
+        title = QLabel("◈ RETRO TEST RUNNER ◈")
+        title.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        title.setStyleSheet(
+            f"color: {_RETRO_PINK}; font-size: 18px; font-weight: bold;"
+            f"font-family: {_RETRO_FONT}; letter-spacing: 4px;"
+        )
+        root.addWidget(title)
+
+        # Summary bar
+        self._lbl_summary = QLabel("Running…")
+        self._lbl_summary.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        self._lbl_summary.setStyleSheet(
+            f"color: {_RETRO_YELLOW}; font-size: 15px; font-family: {_RETRO_FONT};"
+            f"border: 1px solid #333; padding: 4px; background: #111;"
+        )
+        root.addWidget(self._lbl_summary)
+
+        # Results list
+        self._result_list = QListWidget()
+        self._result_list.setStyleSheet(
+            f"background: #111; color: {_RETRO_GREEN};"
+            f"font-family: {_RETRO_FONT}; font-size: 12px;"
+            f"border: 1px solid #333;"
+        )
+        self._result_list.itemDoubleClicked.connect(self._jump_to_cell)
+        root.addWidget(self._result_list)
+
+        # Info label
+        info = QLabel("Double-click a result to jump to that cell.")
+        info.setStyleSheet(f"color: #555; font-size: 11px; font-family: {_RETRO_FONT};")
+        root.addWidget(info)
+
+        # Button row
+        btn_row = QHBoxLayout()
+
+        self._btn_rerun = QPushButton("⟳  Re-run Tests")
+        self._btn_rerun.setStyleSheet(_btn_style(_RETRO_GREEN))
+        self._btn_rerun.clicked.connect(self._run_all)
+        btn_row.addWidget(self._btn_rerun)
+
+        self._btn_save = QPushButton("⬇  Save Report (JSON)")
+        self._btn_save.setStyleSheet(_btn_style(_RETRO_YELLOW))
+        self._btn_save.clicked.connect(self._save_report)
+        btn_row.addWidget(self._btn_save)
+
+        btn_close = QPushButton("✕  Close")
+        btn_close.setStyleSheet(_btn_style(_RETRO_PINK))
+        btn_close.clicked.connect(self.accept)
+        btn_row.addWidget(btn_close)
+
+        root.addLayout(btn_row)
+
+    # ------------------------------------------------------------------
+    # Test execution
+    # ------------------------------------------------------------------
+
+    def _run_all(self):
+        self._result_list.clear()
+        self._lbl_summary.setText("Running…")
+        self._report = []  # for optional JSON export
+
+        test_cells = [
+            (i, cell) for i, cell in enumerate(self._cells)
+            if cell.cell_type.currentText() == "Test"
+        ]
+
+        if not test_cells:
+            self._lbl_summary.setText("No Test cells found.")
+            self._lbl_summary.setStyleSheet(
+                f"color: {_RETRO_YELLOW}; font-size: 15px; font-family: {_RETRO_FONT};"
+                f"border: 1px solid #333; padding: 4px; background: #111;"
+            )
+            return
+
+        total_pass = 0
+        total_fail = 0
+        total_assert = 0
+
+        for cell_idx, cell in test_cells:
+            result = cell.run_test()
+            assertions = result.get('assertions', [])
+            errors = result.get('errors', [])
+            n_pass = sum(1 for a in assertions if a['passed'])
+            n_fail = len(assertions) - n_pass
+            total_pass += n_pass
+            total_fail += n_fail
+            total_assert += len(assertions)
+
+            cell_label = f"Cell {cell_idx + 1}"
+            preview = cell.input.toPlainText().strip().splitlines()
+            if preview:
+                cell_label += f": {preview[0][:40]}"
+
+            # Section header
+            if n_fail == 0 and not errors:
+                hdr_color = _RETRO_GREEN
+                hdr_icon = "✓"
+            else:
+                hdr_color = _RETRO_PINK
+                hdr_icon = "✗"
+
+            hdr_text = (
+                f"{hdr_icon} {cell_label}  "
+                f"[{n_pass}/{len(assertions)} passed"
+                + (f", {len(errors)} error(s)" if errors else "")
+                + "]"
+            )
+            hdr_item = QListWidgetItem(hdr_text)
+            hdr_item.setForeground(QColor(hdr_color))
+            hdr_item.setData(Qt.ItemDataRole.UserRole, cell)
+            self._result_list.addItem(hdr_item)
+
+            # Per-assertion rows
+            for a in assertions:
+                icon = "  ✓" if a['passed'] else "  ✗"
+                color = _RETRO_GREEN if a['passed'] else _RETRO_PINK
+                msg = a.get('message', '')
+                detail = QListWidgetItem(f"{icon} {msg}")
+                detail.setForeground(QColor(color))
+                detail.setData(Qt.ItemDataRole.UserRole, cell)
+                self._result_list.addItem(detail)
+
+                if not a['passed']:
+                    exp = a.get('expected')
+                    act = a.get('actual')
+                    if exp is not None or act is not None:
+                        sub = QListWidgetItem(
+                            f"      expected: {exp!r}   got: {act!r}"
+                        )
+                        sub.setForeground(QColor(_RETRO_YELLOW))
+                        sub.setData(Qt.ItemDataRole.UserRole, cell)
+                        self._result_list.addItem(sub)
+
+            # Error rows
+            for e in errors:
+                err_item = QListWidgetItem(f"  ⚠ {e}")
+                err_item.setForeground(QColor(_RETRO_PINK))
+                err_item.setData(Qt.ItemDataRole.UserRole, cell)
+                self._result_list.addItem(err_item)
+
+            # Spacer row
+            spacer = QListWidgetItem("")
+            spacer.setFlags(Qt.ItemFlag.NoItemFlags)
+            self._result_list.addItem(spacer)
+
+            # Build report entry
+            self._report.append({
+                "cell_index": cell_idx,
+                "cell_preview": preview[0] if preview else "",
+                "total": len(assertions),
+                "passed": n_pass,
+                "failed": n_fail,
+                "assertions": assertions,
+                "errors": errors,
+            })
+
+        # Summary
+        if total_fail == 0:
+            summary = f"✓  ALL PASSED  –  {total_pass}/{total_assert} assertions"
+            s_color = _RETRO_GREEN
+        else:
+            summary = (
+                f"✗  {total_fail} FAILED  –  {total_pass}/{total_assert} assertions"
+            )
+            s_color = _RETRO_PINK
+
+        self._lbl_summary.setText(summary)
+        self._lbl_summary.setStyleSheet(
+            f"color: {s_color}; font-size: 15px; font-family: {_RETRO_FONT};"
+            f"border: 1px solid #333; padding: 4px; background: #111;"
+        )
+
+    # ------------------------------------------------------------------
+    # Helpers
+    # ------------------------------------------------------------------
+
+    def _jump_to_cell(self, item):
+        cell = item.data(Qt.ItemDataRole.UserRole)
+        if cell and self._scroll_area:
+            self._scroll_area.ensureWidgetVisible(cell)
+
+    def _save_report(self):
+        import json
+        from PySide6.QtWidgets import QFileDialog
+        path, _ = QFileDialog.getSaveFileName(
+            self, "Save Test Report", "test_report.json",
+            "JSON Files (*.json)"
+        )
+        if path:
+            with open(path, "w", encoding="utf-8") as f:
+                json.dump(self._report, f, indent=2, default=str)
+
+
+
     def __init__(self, cell_type="Code"):
         super().__init__()
 
@@ -307,8 +529,9 @@ class NotebookCell(QWidget):
 
         # Zellentyp-Auswahl
         self.cell_type = QComboBox()
-        self.cell_type.addItems(["Code", "Markdown"])
+        self.cell_type.addItems(["Code", "Markdown", "Test"])
         self.cell_type.setCurrentText(cell_type)
+        self.cell_type.currentTextChanged.connect(self._on_cell_type_changed)
         self.inner_layout.addWidget(self.cell_type)
 
         # Eingabe mehrzeilig
@@ -333,12 +556,16 @@ class NotebookCell(QWidget):
 
         # Ausgabe (initial leer)
         self.output = QLabel("")
+        self.output.setWordWrap(True)
         self.inner_layout.addWidget(self.output)
 
         self.outer_layout.addLayout(self.inner_layout)
         self.layout.addLayout(self.outer_layout)
         self.setLayout(self.layout)
         self.interpreter = RetroInterpreter()
+
+        # Letztes Testergebnis (für Test-Runner-Panel)
+        self.last_test_result = None
 
         # Soundeffekt vorbereiten
         self.player = QMediaPlayer()
@@ -354,6 +581,31 @@ class NotebookCell(QWidget):
         self.anim_timer.start(60)
         self.anim_phase = 0
 
+        # Initial styling for Test cells
+        self._on_cell_type_changed(self.cell_type.currentText())
+
+    def _on_cell_type_changed(self, cell_type):
+        """Adjust UI when the cell type is switched."""
+        is_test = (cell_type == "Test")
+        self.debug_button.setVisible(cell_type == "Code")
+        if is_test:
+            self.run_button.setText("Run Tests")
+            self.run_button.setStyleSheet(
+                f"background: #1a1a1a; color: {_RETRO_PINK}; font-family: {_RETRO_FONT};"
+                f" font-size: 13px; border: 2px solid {_RETRO_PINK}; border-radius: 6px; padding: 3px 12px;"
+            )
+            self.input.setPlaceholderText(
+                "# Test cell – use ASSERT, ASSERT_EQ, ASSERT_APPROX\n"
+                "# Example:\n"
+                "LET x = 2 + 2\n"
+                "ASSERT_EQ x, 4\n"
+                "ASSERT x > 0\n"
+                "ASSERT_APPROX 3.14159, pi, 0.001"
+            )
+        else:
+            self.run_button.setText("Run")
+            self.run_button.setStyleSheet("")
+
     def open_debugger(self):
         """Open the interactive debugger for this code cell (Code cells only)."""
         if self.cell_type.currentText() != "Code":
@@ -365,6 +617,71 @@ class NotebookCell(QWidget):
         dlg = DebuggerDialog(lines, parent=self)
         dlg.exec()
 
+    def run_test(self):
+        """Execute this test cell and return the result dict. Also updates the output label."""
+        code = self.input.toPlainText()
+        lines = code.splitlines()
+        result = self.interpreter.run_test_block(lines)
+        self.last_test_result = result
+        self._render_test_output(result)
+        return result
+
+    def _render_test_output(self, result):
+        """Render assertion pass/fail results as coloured HTML in the output label."""
+        assertions = result.get('assertions', [])
+        outputs = result.get('outputs', [])
+        errors = result.get('errors', [])
+
+        lines_html = []
+
+        for a in assertions:
+            if a['passed']:
+                icon = '&#10003;'  # ✓
+                color = _RETRO_GREEN
+            else:
+                icon = '&#10007;'  # ✗
+                color = _RETRO_PINK
+            msg = a.get('message', '')
+            # Escape HTML special chars
+            msg = msg.replace('&', '&amp;').replace('<', '&lt;').replace('>', '&gt;')
+            lines_html.append(
+                f"<span style='color:{color};'>{icon} {msg}</span>"
+            )
+
+        for o in outputs:
+            o_esc = o.replace('&', '&amp;').replace('<', '&lt;').replace('>', '&gt;')
+            lines_html.append(
+                f"<span style='color:{_RETRO_YELLOW};'>&gt; {o_esc}</span>"
+            )
+
+        for e in errors:
+            e_esc = e.replace('&', '&amp;').replace('<', '&lt;').replace('>', '&gt;')
+            lines_html.append(
+                f"<span style='color:{_RETRO_PINK};'>&#9888; {e_esc}</span>"
+            )
+
+        total = len(assertions)
+        passed = sum(1 for a in assertions if a['passed'])
+        failed = total - passed
+
+        if total > 0:
+            if failed == 0:
+                summary_color = _RETRO_GREEN
+                summary = f"&#9608; {passed}/{total} passed"
+            else:
+                summary_color = _RETRO_PINK
+                summary = f"&#9608; {passed}/{total} passed, {failed} failed"
+            lines_html.append(
+                f"<span style='color:{summary_color}; font-weight:bold;'>{summary}</span>"
+            )
+
+        html = (
+            f"<span style='font-family:Courier New,monospace; font-size:13px;'>"
+            + "<br>".join(lines_html)
+            + "</span>"
+        )
+        self.output.setText(html)
+
     def execute(self):
         # Status auf "Läuft..." setzen, falls möglich
         main_window = self.parent()
@@ -374,12 +691,22 @@ class NotebookCell(QWidget):
             main_window.set_status('#ffff00', 'Läuft...')
         self.player.stop()  # Falls noch ein Sound läuft
         self.player.play()
-        if self.cell_type.currentText() == "Markdown":
+        cell_type = self.cell_type.currentText()
+        if cell_type == "Markdown":
             md = self.input.toPlainText()
             html = markdown2.markdown(md)
             self.output.setText(html)
             if main_window and hasattr(main_window, 'set_status'):
                 main_window.set_status('#33ff66', 'Bereit')
+        elif cell_type == "Test":
+            result = self.run_test()
+            assertions = result.get('assertions', [])
+            failed = sum(1 for a in assertions if not a['passed'])
+            if main_window and hasattr(main_window, 'set_status'):
+                if result.get('errors') or failed:
+                    main_window.set_status('#ff3333', f'Tests: {failed} failed')
+                else:
+                    main_window.set_status('#33ff66', 'Tests passed')
         else:
             code = self.input.toPlainText()
             lines = code.splitlines()
