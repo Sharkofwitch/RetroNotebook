@@ -164,6 +164,15 @@ class RetroInterpreter:
         elif line.upper().startswith("DEF "):
             return self.handle_function_def(line[4:].strip())
 
+        elif line.upper().startswith("ASSERT_EQ "):
+            return self._handle_assert_eq(line)
+
+        elif line.upper().startswith("ASSERT_APPROX "):
+            return self._handle_assert_approx(line)
+
+        elif line.upper().startswith("ASSERT "):
+            return self._handle_assert(line)
+
         else:
             return self.eval_expr(line)
 
@@ -195,6 +204,11 @@ class RetroInterpreter:
             "list(x)  - Convert to list\n"
             "ord(c)   - Unicode code of character\n"
             "chr(n)   - Character from Unicode code\n"
+            "\n"
+            "# Assertions (use in Test cells):\n"
+            "ASSERT expr                - Pass if expr is truthy\n"
+            "ASSERT_EQ a, b             - Pass if a equals b\n"
+            "ASSERT_APPROX a, b [, tol] - Pass if |a-b| <= tol (default 1e-6)\n"
             "\n"
             "# Notes:\n"
             "- All graphics commands in a code block are shown together.\n"
@@ -366,8 +380,175 @@ class RetroInterpreter:
 
         self.functions[name] = (args, body)
         return f"Function '{name}' defined"
-    
-   # Funktion zur Auswertung von Ausdrücken
+
+    # ------------------------------------------------------------------
+    # Assertion handlers (used by test cells)
+    # ------------------------------------------------------------------
+
+    @staticmethod
+    def _split_top_level(text, sep=','):
+        """Split *text* on *sep* characters that are at bracket/paren depth 0.
+
+        This avoids breaking on commas inside list literals like ``[1, 2]``
+        or function calls like ``max(a, b)``.
+        """
+        parts = []
+        depth = 0
+        current = []
+        for ch in text:
+            if ch in '([{':
+                depth += 1
+                current.append(ch)
+            elif ch in ')]}':
+                depth -= 1
+                current.append(ch)
+            elif ch == sep and depth == 0:
+                parts.append(''.join(current).strip())
+                current = []
+            else:
+                current.append(ch)
+        if current or parts:
+            parts.append(''.join(current).strip())
+        return parts
+
+    def _handle_assert(self, line):
+        """ASSERT expr  – passes if expr is truthy."""
+        expr = line[7:].strip()
+        try:
+            value = self.eval_expr(expr)
+            if isinstance(value, str) and value.startswith("Error"):
+                return {"assertion": {
+                    "type": "ASSERT", "passed": False,
+                    "expr": expr, "actual": value,
+                    "message": f"ASSERT {expr} → eval error: {value}",
+                }}
+            passed = bool(value)
+            return {"assertion": {
+                "type": "ASSERT", "passed": passed,
+                "expr": expr, "actual": value,
+                "message": (
+                    f"ASSERT {expr} → {value}"
+                    if passed else
+                    f"ASSERT {expr} → {value!r} (expected truthy)"
+                ),
+            }}
+        except Exception as e:
+            return {"assertion": {
+                "type": "ASSERT", "passed": False,
+                "expr": expr, "actual": str(e),
+                "message": f"ASSERT {expr}: Error: {e}",
+            }}
+
+    def _handle_assert_eq(self, line):
+        """ASSERT_EQ a, b  – passes if a == b."""
+        args_str = line[10:].strip()
+        parts = self._split_top_level(args_str)
+        if len(parts) != 2:
+            return {"assertion": {
+                "type": "ASSERT_EQ", "passed": False,
+                "expr": args_str, "actual": None, "expected": None,
+                "message": f"ASSERT_EQ syntax error: expected 2 arguments",
+            }}
+        expr_a, expr_b = parts[0], parts[1]
+        try:
+            a = self.eval_expr(expr_a)
+            b = self.eval_expr(expr_b)
+            passed = (a == b)
+            return {"assertion": {
+                "type": "ASSERT_EQ", "passed": passed,
+                "expr": f"{expr_a} == {expr_b}", "actual": a, "expected": b,
+                "message": (
+                    f"ASSERT_EQ {expr_a} == {expr_b} → {a}"
+                    if passed else
+                    f"ASSERT_EQ failed: expected {b!r}, got {a!r}"
+                ),
+            }}
+        except Exception as e:
+            return {"assertion": {
+                "type": "ASSERT_EQ", "passed": False,
+                "expr": args_str, "actual": str(e), "expected": None,
+                "message": f"ASSERT_EQ {args_str}: Error: {e}",
+            }}
+
+    def _handle_assert_approx(self, line):
+        """ASSERT_APPROX a, b [, tol]  – passes if |a - b| <= tol (default 1e-6)."""
+        args_str = line[14:].strip()
+        parts = self._split_top_level(args_str)
+        if len(parts) < 2 or len(parts) > 3:
+            return {"assertion": {
+                "type": "ASSERT_APPROX", "passed": False,
+                "expr": args_str, "actual": None, "expected": None,
+                "message": "ASSERT_APPROX syntax error: expected 2 or 3 arguments",
+            }}
+        expr_a, expr_b = parts[0], parts[1]
+        expr_tol = parts[2] if len(parts) == 3 else "1e-6"
+        try:
+            a = float(self.eval_expr(expr_a))
+            b = float(self.eval_expr(expr_b))
+            tol = float(self.eval_expr(expr_tol))
+            diff = abs(a - b)
+            passed = diff <= tol
+            return {"assertion": {
+                "type": "ASSERT_APPROX", "passed": passed,
+                "expr": f"|{expr_a} - {expr_b}| ≤ {tol}", "actual": a, "expected": b,
+                "message": (
+                    f"ASSERT_APPROX {expr_a} ≈ {expr_b}  (|{a}-{b}|={diff:.2e} ≤ {tol:.2e})"
+                    if passed else
+                    f"ASSERT_APPROX failed: |{a} - {b}| = {diff:.6f} > {tol}"
+                ),
+            }}
+        except Exception as e:
+            return {"assertion": {
+                "type": "ASSERT_APPROX", "passed": False,
+                "expr": args_str, "actual": str(e), "expected": None,
+                "message": f"ASSERT_APPROX {args_str}: Error: {e}",
+            }}
+
+    def run_test_block(self, lines):
+        """Execute *lines* in a fresh sandboxed interpreter and collect assertion results.
+
+        Returns a dict::
+
+            {
+                'assertions': [{'type':..., 'passed':bool, 'expr':..., 'message':...}, ...],
+                'outputs':    [str, ...],   # non-assertion text output (e.g. PRINT)
+                'errors':     [str, ...],   # runtime error strings
+            }
+
+        Isolation guarantees:
+        - A brand-new ``RetroInterpreter`` is used for each call, so variables,
+          functions, and loop state from normal code cells cannot bleed into
+          tests and vice-versa.
+        - Graphics commands are silently discarded; they have no side-effects in
+          test context.
+        - The caller's own interpreter state is never modified.
+        """
+        fresh = RetroInterpreter()
+        assertions = []
+        outputs = []
+        errors = []
+
+        raw = fresh.run_block(lines)
+
+        def _collect(item):
+            if isinstance(item, list):
+                for sub in item:
+                    _collect(sub)
+            elif isinstance(item, dict) and 'assertion' in item:
+                assertions.append(item['assertion'])
+            elif isinstance(item, dict) and 'graphics' in item:
+                pass  # graphics are ignored in test context
+            elif isinstance(item, str) and item.startswith('Error'):
+                errors.append(item)
+            elif item:
+                outputs.append(str(item))
+
+        for r in raw:
+            _collect(r)
+
+        return {'assertions': assertions, 'outputs': outputs, 'errors': errors}
+
+
     def eval_expr(self, expr):
         # Ersetze bekannte Konstanten
         for const, val in CONSTANTS.items():

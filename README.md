@@ -4,8 +4,11 @@ Ein modernes, retro-inspiriertes Desktop-Notebook für Code, Mathematik, Logik u
 
 ## Features
 - Hochwertige Retro-Optik (CRT-Look, Scanlines, Glow, animierte Pixel, Retro-Icons)
-- Zellen für Code (eigener Interpreter) und Markdown
+- Zellen für Code (eigener Interpreter), Markdown **und Tests**
 - Eigener Interpreter für mathematische Ausdrücke, Variablen, Listen, Strings, Funktionen, Bedingungen, Schleifen
+- **Test-Zellen** mit Assertion-Befehlen (`ASSERT`, `ASSERT_EQ`, `ASSERT_APPROX`) und farbcodiertem Ergebnis
+- **Test-Runner-Panel** – alle Test-Zellen auf einmal ausführen, mit Gesamt-/Bestanden-/Fehlgeschlagen-Übersicht
+- **Interaktiver Debugger** – Schritt-für-Schritt-Ausführung, Breakpoints, Variable Inspector
 - Grafikbefehle: Punkte, Linien, Kreise (z.B. zum Plotten von Daten)
 - Soundeffekte beim Ausführen und Starten
 - Notebook speichern und laden (JSON)
@@ -71,12 +74,49 @@ Ein modernes, retro-inspiriertes Desktop-Notebook für Code, Mathematik, Logik u
 - Eingebaute Funktionen: `len`, `str`, `int`, `float`, `list`, `ord`, `chr`, `sqrt`, `sin`, `cos`, `tan`, `log`, `exp`
 - Minigames: Im Hauptmenü auswählbar, Fortschritt wird gespeichert.
 
+## Test-Zellen & Assertions
+
+Wähle den Zellentyp **Test** aus, um Assertions in eine Zelle zu schreiben:
+
+```
+# Variablen setzen, dann testen
+LET x = 2 + 2
+ASSERT x > 0
+ASSERT_EQ x, 4
+ASSERT_APPROX 3.14159, pi, 0.001
+```
+
+Unterstützte Assertion-Befehle:
+
+| Befehl | Beschreibung |
+|--------|-------------|
+| `ASSERT expr` | Besteht, wenn `expr` truthy ist |
+| `ASSERT_EQ a, b` | Besteht, wenn `a == b` |
+| `ASSERT_APPROX a, b [, tol]` | Besteht, wenn `|a - b| ≤ tol` (Standard: `1e-6`) |
+
+- Drücke **Run Tests** in einer Test-Zelle, um nur diese Zelle zu testen.
+- Drücke **▶  Run Tests** in der Hauptleiste, um alle Test-Zellen auf einmal auszuführen.
+- Das Test-Runner-Panel zeigt Gesamt-/Bestanden-/Fehlgeschlagen-Übersicht sowie Details pro Zelle.
+- Durch Doppelklick auf ein Ergebnis springt der Fokus zur zugehörigen Zelle.
+- Optional: Testergebnisse als JSON-Bericht speichern.
+- Testergebnisse werden **nicht** automatisch im Notebook gespeichert.
+
+## Interaktiver Debugger
+
+Klicke **Debug** in einer Code-Zelle, um den Schritt-für-Schritt-Debugger zu öffnen:
+- Zeilenweise Ausführung
+- Variable Inspector nach jedem Schritt
+- Breakpoints per Klick auf eine Zeile setzen/entfernen
+- "Continue" führt bis zum nächsten Breakpoint aus
+- Session jederzeit neu starten
+
 ## Hinweise
 - Alle Grafikbefehle in einer Codezelle werden als ein Bild angezeigt.
 - WHILE/ENDWHILE, FOR/NEXT und IF/ELSE/ENDIF unterstützen Blöcke.
 - Fehler in Schleifen oder Grafikbefehlen brechen die Ausführung ab.
 - Maximal 1000 WHILE-Durchläufe (Schutz vor Endlosschleifen).
 - Ressourcen werden immer über `resource_path` geladen (auch im App-Bundle).
+- Test-Zellen werden in einer eigenen, isolierten Interpreter-Instanz ausgeführt.
 
 ## To-Do / Ideen
 - Export als HTML/PDF
@@ -86,8 +126,10 @@ Ein modernes, retro-inspiriertes Desktop-Notebook für Code, Mathematik, Logik u
 - Noch mehr Animationen und Retro-Effekte
 - Weitere Minigames und Easter Eggs
 - Bessere macOS-Integration (Dock-Icon, Info.plist, App-Icon)
+- CI-Stil JSON-Test-Export (Design vorbereitet)
 
 ---
 
-(c) 2025 by Jakob Szarkowicz & Contributors
-MIT License, siehe LICENSE
+(c) 2025 by Jakob Szarkowicz & Contributors  
+MIT License, siehe LICENSE  
+Siehe [CHANGELOG.md](CHANGELOG.md) für eine vollständige Änderungshistorie.
